@@ -10,17 +10,22 @@ import aiomqtt
 
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
 from dali.command import Command, Response, from_frame
-from dali.device.general import (QueryDeviceStatus, QueryDeviceStatusResponse,
-                                 QueryInstanceEnabled, QueryInstanceType,
-                                 QueryNumberOfInstances, StartQuiescentMode,
-                                 StopQuiescentMode)
+from dali.device.general import (
+    QueryDeviceStatus,
+    QueryDeviceStatusResponse,
+    QueryInstanceEnabled,
+    QueryInstanceType,
+    QueryNumberOfInstances,
+    StartQuiescentMode,
+    StopQuiescentMode,
+)
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
 from dali.driver.base import DALIDriver
 from dali.driver.hid import _callback
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
 from dali.gear.general import EnableDeviceType
-from dali.sequences import sleep as seq_sleep
 from dali.sequences import progress as seq_progress
+from dali.sequences import sleep as seq_sleep
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита
@@ -231,6 +236,7 @@ class Barrier(_LoopBoundMixin):
 @dataclass
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
+
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
     mqtt_username: Optional[str] = None
@@ -404,21 +410,21 @@ class WBDALIDriver(DALIDriver):
     def _create_mqtt_client(self) -> aiomqtt.Client:
         """Create and configure MQTT client."""
         client_kwargs = {
-            'hostname': self.config.mqtt_host,
-            'port': self.config.mqtt_port,
+            "hostname": self.config.mqtt_host,
+            "port": self.config.mqtt_port,
         }
 
         if self.config.mqtt_username:
-            client_kwargs['username'] = self.config.mqtt_username
+            client_kwargs["username"] = self.config.mqtt_username
         if self.config.mqtt_password:
-            client_kwargs['password'] = self.config.mqtt_password
+            client_kwargs["password"] = self.config.mqtt_password
 
         return aiomqtt.Client(**client_kwargs)
 
     def __init__(
         self,
         config: Optional[WBDALIConfig] = None,
-        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None
+        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
@@ -485,7 +491,7 @@ class WBDALIDriver(DALIDriver):
         self.cmd_counter = 0
         self.send_barrier = Barrier(
             sef.config.barrier_max_concurrent_tasks,
-            default_timeout=self.config.barrier_timeout
+            default_timeout=self.config.barrier_timeout,
         )
 
     async def run_sequence(
