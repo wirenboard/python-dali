@@ -6,6 +6,7 @@ import logging
 import struct
 import time
 from time import sleep
+from dataclasses import dataclass
 from typing import Any, Callable, Generator, Iterable, NamedTuple, Optional
 from urllib.parse import ParseResult, urlparse, urlunparse
 
@@ -234,6 +235,26 @@ class Barrier(_LoopBoundMixin):
         return self._state is _BarrierState.BROKEN
 
 
+@dataclass
+class WBDALIConfig:
+    """Configuration for WBDALIDriver."""
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_username: Optional[str] = None
+    mqtt_password: Optional[str] = None
+    device_name: str = "wb-mdali_2"
+    modbus_slave_id: int = 2
+    modbus_port_path: str = "/dev/ttyRS485-1"
+    modbus_baud_rate: int = 115200
+    modbus_parity: str = "N"
+    modbus_data_bits: int = 8
+    modbus_stop_bits: int = 2
+    reconnect_interval: int = 1
+    reconnect_limit: Optional[int] = None
+    barrier_max_concurrent_tasks: int = 3
+    barrier_timeout: float = 0.01
+
+
 class WBDALIDriver(DALIDriver):
     """``DALIDriver`` implementation for Hasseb DALI USB device."""
 
@@ -257,7 +278,7 @@ class WBDALIDriver(DALIDriver):
             json.dumps(
                 {
                     "params": {
-                        "slave_id": 2,
+                        "slave_id": self.config.modbus_slave_id,
                         "function": function,
                         "address": address,
                         "count": count,
@@ -266,11 +287,11 @@ class WBDALIDriver(DALIDriver):
                         "frame_timeout": 0,
                         "protocol": "modbus",
                         "format": "HEX",
-                        "path": "/dev/ttyRS485-1",
-                        "baud_rate": 115200,
-                        "parity": "N",
-                        "data_bits": 8,
-                        "stop_bits": 2,
+                        "path": self.config.modbus_port_path,
+                        "baud_rate": self.config.modbus_baud_rate,
+                        "parity": self.config.modbus_parity,
+                        "data_bits": self.config.modbus_data_bits,
+                        "stop_bits": self.config.modbus_stop_bits,
                         "msg": msg,
                     },
                     "id": 53,
@@ -326,9 +347,9 @@ class WBDALIDriver(DALIDriver):
 
     async def _incoming_ff_task(self):
         self.logger.debug("Incoming FF task running...")
-        async with aiomqtt.Client("localhost") as mqtt_client:
+        async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
-            await mqtt_client.subscribe(f"/devices/wb-mdali_2/controls/channel1_receive_24bit_forward")
+            await mqtt_client.subscribe(f"/devices/{self.config.device_name}/controls/channel1_receive_24bit_forward")
             async for message in mqtt_client.messages:
                 self.logger.debug(f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}")
 
@@ -348,7 +369,7 @@ class WBDALIDriver(DALIDriver):
 
             # Subscribe to reply topics
             for i in range(self.device_queue_size):
-                await self.mqtt_client.subscribe(f"/devices/wb-mdali_2/controls/channel1_reply{i}")
+                await self.mqtt_client.subscribe(f"/devices/{self.config.device_name}/controls/channel1_reply{i}")
             self.connected.set()
 
             # Listen for messages
@@ -387,26 +408,41 @@ class WBDALIDriver(DALIDriver):
 
                 resp_future.set_result(dali.frame.BackwardFrame(resp & ~ERR_STILL_SENDING))
 
-    def __init__(self, path, reconnect_interval=1, reconnect_limit=None, glob=False, dev_inst_map=None):
+    def _create_mqtt_client(self) -> aiomqtt.Client:
+        """Create and configure MQTT client."""
+        client_kwargs = {
+            'hostname': self.config.mqtt_host,
+            'port': self.config.mqtt_port,
+        }
+
+        if self.config.mqtt_username:
+            client_kwargs['username'] = self.config.mqtt_username
+        if self.config.mqtt_password:
+            client_kwargs['password'] = self.config.mqtt_password
+
+        return aiomqtt.Client(**client_kwargs)
+
+    def __init__(
+        self,
+        config: Optional[WBDALIConfig] = None,
+        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None
+    ):
+        self.config = config or WBDALIConfig()
+        self.dev_inst_map = dev_inst_map
         self.logger.debug(
             "path=%s, reconnect_interval=%s, reconnect_limit=%s, glob=%s, dev_inst_map=%s",
-            path,
-            reconnect_interval,
-            reconnect_limit,
+            config.modbus_port_path,
+            config.reconnect_interval,
+            config.reconnect_limit,
             glob,
             dev_inst_map,
         )
 
         self._log = logging.getLogger()
-        self._path = path
-        self.mqtt_client = None
-        self._reconnect_interval = reconnect_interval
-        self._reconnect_limit = reconnect_limit
         self._reconnect_count = 0
         self._reconnect_task = None
         self._glob = glob
 
-        self.dev_inst_map = dev_inst_map
         self._f = None
 
         self._current_command_frame = None
@@ -452,9 +488,12 @@ class WBDALIDriver(DALIDriver):
         self.device_queue_size = 10
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
-        self.mqtt_client = aiomqtt.Client("localhost")
+        self.mqtt_client = self._create_mqtt_client()
         self.cmd_counter = 0
-        self.send_barrier = Barrier(3, default_timeout=0.01)
+        self.send_barrier = Barrier(
+            sef.config.barrier_max_concurrent_tasks,
+            default_timeout=self.config.barrier_timeout
+        )
 
     async def run_sequence(
         self,
@@ -616,7 +655,7 @@ class WBDALIDriver(DALIDriver):
         """
         if self._f:
             return True
-        self._log.debug("trying to connect to %s...", self._path)
+        self._log.debug("trying to connect to %s...", self.config.modbus_port_path)
 
         self._reconnect_count = 0
         # self.connected.set()
@@ -634,13 +673,13 @@ class WBDALIDriver(DALIDriver):
 
     async def _reconnect(self):
         self._reconnect_count += 1
-        if self._reconnect_limit is not None and self._reconnect_count > self._reconnect_limit:
+        if self.config.reconnect_limit is not None and self._reconnect_count > self.config.reconnect_limit:
             # We have failed.
             self._log.debug("connection limit reached")
             self._reconnect_count = 0
             self._reconnect_task = None
             return
-        await asyncio.sleep(self._reconnect_interval)
+        await asyncio.sleep(self.config.reconnect_interval)
         self._reconnect_task = None
         self.connect()
 
