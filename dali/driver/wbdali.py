@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import threading
 from dataclasses import dataclass
+from itertools import groupby
+from operator import itemgetter
 from typing import Any, Iterable, Optional
 
 import aiomqtt
@@ -48,12 +52,7 @@ class BrokenBarrierError(RuntimeError):
     """Barrier is broken by barrier.abort() call."""
 
 
-import threading
-
 _global_lock = threading.Lock()
-
-from itertools import groupby
-from operator import itemgetter
 
 
 class _LoopBoundMixin:
@@ -176,7 +175,9 @@ class Barrier(_LoopBoundMixin):
                 timeout=timeout or self._default_timeout,
             )
         except asyncio.TimeoutError:
-            logging.debug("Barrier wait timed out, releasing with %d parties!!!!", self._count)
+            logging.debug(
+                "Barrier wait timed out, releasing with %d parties!!!!", self._count
+            )
             await self._release()
 
         if self._state in (_BarrierState.BROKEN, _BarrierState.RESETTING):
@@ -322,9 +323,13 @@ class WBDALIDriver(DALIDriver):
         """Get the next pointer for the message queue."""
         async with self.next_pointer_lock:
             pointer = self.next_pointer
-            if (pointer in self.responses) and asyncio.isfuture(self.responses[pointer]):
+            if (pointer in self.responses) and asyncio.isfuture(
+                self.responses[pointer]
+            ):
                 if not self.responses[pointer].done():
-                    self.logger.debug("Pointer %d is still waiting for a response", pointer)
+                    self.logger.debug(
+                        "Pointer %d is still waiting for a response", pointer
+                    )
                 await self.responses[pointer]
 
             self.responses[pointer] = asyncio.get_event_loop().create_future()
@@ -340,7 +345,9 @@ class WBDALIDriver(DALIDriver):
                     val = self.responses[i].done()
                 msgs.append(f"{i}={val}")
 
-            self.logger.debug("Next pointer: %d, responses: %s", pointer, " ".join(msgs))
+            self.logger.debug(
+                "Next pointer: %d, responses: %s", pointer, " ".join(msgs)
+            )
 
             return pointer, self.responses[pointer]
 
@@ -348,9 +355,13 @@ class WBDALIDriver(DALIDriver):
         self.logger.debug("Incoming FF task running...")
         async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
-            await mqtt_client.subscribe(f"/devices/{self.config.device_name}/controls/channel1_receive_24bit_forward")
+            await mqtt_client.subscribe(
+                f"/devices/{self.config.device_name}/controls/channel1_receive_24bit_forward"
+            )
             async for message in mqtt_client.messages:
-                self.logger.debug(f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}")
+                self.logger.debug(
+                    f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}"
+                )
 
                 if message.retain:
                     continue
@@ -368,12 +379,16 @@ class WBDALIDriver(DALIDriver):
 
             # Subscribe to reply topics
             for i in range(self.device_queue_size):
-                await self.mqtt_client.subscribe(f"/devices/{self.config.device_name}/controls/channel1_reply{i}")
+                await self.mqtt_client.subscribe(
+                    f"/devices/{self.config.device_name}/controls/channel1_reply{i}"
+                )
             self.connected.set()
 
             # Listen for messages
             async for message in self.mqtt_client.messages:
-                self.logger.debug(f"Received message: {message.topic} {message.payload.decode()}")
+                self.logger.debug(
+                    f"Received message: {message.topic} {message.payload.decode()}"
+                )
 
                 if message.retain:
                     self.logger.debug("Received retained message, ignoring...")
@@ -382,10 +397,14 @@ class WBDALIDriver(DALIDriver):
                 resp = int(message.payload.decode())
 
                 # Process the message as needed
-                resp_pointer = int(str(message.topic).split("/")[-1].replace("channel1_reply", ""))
+                resp_pointer = int(
+                    str(message.topic).split("/")[-1].replace("channel1_reply", "")
+                )
 
                 if resp_pointer not in self.responses:
-                    self.logger.warning(f"Received response for unknown pointer: {resp_pointer}")
+                    self.logger.warning(
+                        f"Received response for unknown pointer: {resp_pointer}"
+                    )
                     continue
                 resp_future = self.responses[resp_pointer]
 
@@ -396,7 +415,11 @@ class WBDALIDriver(DALIDriver):
                     or ((resp & ERR_FRAME_LENGTH) != 0)
                     or ((resp & ERR_STOP_BITS) != 0)
                 ):
-                    self.logger.error("Received error in response: %x (%x)", resp, resp & ~ERR_STILL_SENDING)
+                    self.logger.error(
+                        "Received error in response: %x (%x)",
+                        resp,
+                        resp & ~ERR_STILL_SENDING,
+                    )
                     resp_future.set_result(BackwardFrameError(0))
                     continue
 
@@ -490,7 +513,7 @@ class WBDALIDriver(DALIDriver):
         self.mqtt_client = self._create_mqtt_client()
         self.cmd_counter = 0
         self.send_barrier = Barrier(
-            sef.config.barrier_max_concurrent_tasks,
+            self.config.barrier_max_concurrent_tasks,
             default_timeout=self.config.barrier_timeout,
         )
 
@@ -549,12 +572,16 @@ class WBDALIDriver(DALIDriver):
     def extract(self, data):
         self.logger.debug("extract(data=%s)", data)
 
-    async def _add_cmd_to_send_buffer(self, pointer: int, reg_value: int, timeout: int = None) -> None:
+    async def _add_cmd_to_send_buffer(
+        self, pointer: int, reg_value: int, timeout: int = None
+    ) -> None:
         """Use barrier primitive to write multiple commands via single Modbus request"""
         self.logger.debug("waiting at the barrier, pointer=%d", pointer)
         payload = (pointer, reg_value)
         position, payloads = await self.send_barrier.wait(payload, timeout=timeout)
-        self.logger.debug("barrier position: %s, pointer=%d, payloads=%s", position, pointer, payloads)
+        self.logger.debug(
+            "barrier position: %s, pointer=%d, payloads=%s", position, pointer, payloads
+        )
 
         if position == 0:
             # We are the first task to reach the barrier, we will send the commands
@@ -589,18 +616,25 @@ class WBDALIDriver(DALIDriver):
         # await self._not_waiting_for_reply.wait()
 
         if (cmd.sendtwice) and (cmd.response is not None):
-            self.logger.warning("Command %s has sendtwice=True and a response, this is not supported", cmd)
+            self.logger.warning(
+                "Command %s has sendtwice=True and a response, this is not supported",
+                cmd,
+            )
             raise ValueError("Command with sendtwice=True cannot have a response")
 
         if cmd.sendtwice:
-            next_pointers = await asyncio.gather(self.get_next_pointer(), self.get_next_pointer())
+            next_pointers = await asyncio.gather(
+                self.get_next_pointer(), self.get_next_pointer()
+            )
         else:
             next_pointers = [
                 await self.get_next_pointer(),
             ]
         # if cmd.bits
         for i in range(2 if cmd.sendtwice else 1):
-            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, 2 if cmd.sendtwice else 1)
+            self.logger.debug(
+                "Sending command: %s %d/%d", cmd, i + 1, 2 if cmd.sendtwice else 1
+            )
             pointer, future = next_pointers[i]
 
             if len(cmd.frame) == 16:
@@ -610,11 +644,13 @@ class WBDALIDriver(DALIDriver):
             elif len(cmd.frame) == 25:
                 first_two_bytes = cmd.frame.as_integer >> 8
                 last_byte = cmd.frame.as_integer & 0xFF
-                #insert the 0x01 bit in the middle
+                # insert the 0x01 bit in the middle
                 dali_25bit_frame = (first_two_bytes << 1) | 0x00
                 dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
                 modbus_reg_val = (dali_25bit_frame << 7) | 0x02
-                self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", modbus_reg_val)
+                self.logger.debug(
+                    "Sending 25-bit frame, modbus_reg_val=%x", modbus_reg_val
+                )
 
             await self._add_cmd_to_send_buffer(pointer, modbus_reg_val, timeout=None)
 
@@ -672,7 +708,10 @@ class WBDALIDriver(DALIDriver):
 
     async def _reconnect(self):
         self._reconnect_count += 1
-        if self.config.reconnect_limit is not None and self._reconnect_count > self.config.reconnect_limit:
+        if (
+            self.config.reconnect_limit is not None
+            and self._reconnect_count > self.config.reconnect_limit
+        ):
             # We have failed.
             self._log.debug("connection limit reached")
             self._reconnect_count = 0
@@ -732,16 +771,19 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         logging.debug("Starting autodiscover with addresses: %s", addresses)
 
         if isinstance(addresses, int):
-            addresses = [n for n in range(0, addresses)]
+            addresses = list(range(0, addresses))
         elif isinstance(addresses, tuple) and len(addresses) == 2:
-            addresses = [n for n in range(addresses[0], addresses[1] + 1)]
+            addresses = list(range(addresses[0], addresses[1] + 1))
 
         # Use quiescent mode to reduce bus contention from input devices
         await driver.send(StartQuiescentMode(DeviceBroadcast()))
         responses = await asyncio.gather(
-            *[driver.send(QueryDeviceStatus(device=DeviceShort(addr_int))) for addr_int in addresses],
+            *[
+                driver.send(QueryDeviceStatus(device=DeviceShort(addr_int)))
+                for addr_int in addresses
+            ],
         )
-        
+
         queries = []
         logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
         for addr_int, rsp in zip(addresses, responses):
@@ -785,7 +827,9 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         enabled_responses = responses[: len(enabled_queries)]
         type_responses = responses[len(enabled_queries) :]
 
-        for query, enabled_rsp, type_rsp in zip(enabled_queries, enabled_responses, type_responses):
+        for query, enabled_rsp, type_rsp in zip(
+            enabled_queries, enabled_responses, type_responses
+        ):
             addr = query.destination
             inst = query.instance
             if check_bad_rsp(enabled_rsp):
