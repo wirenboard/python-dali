@@ -8,10 +8,8 @@ from typing import Any, Iterable, Optional
 
 import aiomqtt
 
-import dali.gear
-import dali.gear.general as gear
-from dali import command, gear, sequences
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
+from dali.command import Command, Response, from_frame
 from dali.device.general import (QueryDeviceStatus, QueryDeviceStatusResponse,
                                  QueryInstanceEnabled, QueryInstanceType,
                                  QueryNumberOfInstances, StartQuiescentMode,
@@ -20,6 +18,9 @@ from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
 from dali.driver.base import DALIDriver
 from dali.driver.hid import _callback
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
+from dali.gear.general import EnableDeviceType
+from dali.sequences import sleep as seq_sleep
+from dali.sequences import progress as seq_progress
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита
@@ -348,7 +349,7 @@ class WBDALIDriver(DALIDriver):
                 if message.retain:
                     continue
                 frame = ForwardFrame(24, int(message.payload) >> 8)
-                cmd = dali.command.from_frame(frame, dev_inst_map=self.dev_inst_map)
+                cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
                 self.logger.debug(f"Received FF24: {cmd}")
                 self.bus_traffic._invoke(cmd, None, False)
 
@@ -517,9 +518,9 @@ class WBDALIDriver(DALIDriver):
                         return r.value
                     response = None
                     logging.debug("got command from sequence: %s", cmd)
-                    if isinstance(cmd, sequences.sleep):
+                    if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
-                    elif isinstance(cmd, sequences.progress):
+                    elif isinstance(cmd, seq_progress):
                         if progress:
                             progress(cmd)
                     else:
@@ -527,7 +528,7 @@ class WBDALIDriver(DALIDriver):
                             # The 'send()' calls here *do* refer to the DALI
                             # transmit method
                             await self.send(
-                                gear.general.EnableDeviceType(cmd.devicetype),
+                                EnableDeviceType(cmd.devicetype),
                             )
                         response = await self.send(cmd)
             finally:
@@ -571,7 +572,7 @@ class WBDALIDriver(DALIDriver):
                     msg=msg,
                 )
 
-    async def send(self, cmd: command.Command) -> Optional[command.Response]:
+    async def send(self, cmd: Command) -> Optional[Response]:
         self.logger.debug("send(command=%s)", cmd)
         response = None
         response = None
