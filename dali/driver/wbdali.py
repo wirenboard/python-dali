@@ -540,9 +540,28 @@ class WBDALIDriver(DALIDriver):
                     msg=msg,
                 )
 
+    def _encode_frame_for_modbus(self, dali_frame: frame.Frame) -> int:
+        frame_len = len(dali_frame)
+        frame_int = dali_frame.as_integer
+
+        if frame_len == 16:
+            return frame_int << 16
+        elif frame_len == 24:
+            return (frame_int << 8) | 0x01
+        elif frame_len == 25:
+            first_two_bytes = frame_int >> 8
+            last_byte = frame_int & 0xFF
+            # insert the 0x01 bit in the middle
+            dali_25bit_frame = (first_two_bytes << 1) | 0x00
+            dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
+            result = (dali_25bit_frame << 7) | 0x02
+            self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", result)
+            return result
+        else:
+            raise ValueError(f"Unsupported frame length: {frame_len}")
+
     async def send(self, cmd: command.Command) -> Optional[command.Response]:
         self.logger.debug("send(command=%s)", cmd)
-        response = None
         response = None
         # await self.connected.wait()
         # await asyncio.sleep(0.001)
@@ -561,24 +580,10 @@ class WBDALIDriver(DALIDriver):
                 await self.get_next_pointer(),
             ]
         # if cmd.bits
-        for i in range(2 if cmd.sendtwice else 1):
-            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, 2 if cmd.sendtwice else 1)
-            pointer, future = next_pointers[i]
-
-            if len(cmd.frame) == 16:
-                modbus_reg_val = cmd.frame.as_integer << 16
-            elif len(cmd.frame) == 24:
-                modbus_reg_val = (cmd.frame.as_integer << 8) | 0x01
-            elif len(cmd.frame) == 25:
-                first_two_bytes = cmd.frame.as_integer >> 8
-                last_byte = cmd.frame.as_integer & 0xFF
-                #insert the 0x01 bit in the middle
-                dali_25bit_frame = (first_two_bytes << 1) | 0x00
-                dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
-                modbus_reg_val = (dali_25bit_frame << 7) | 0x02
-                self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", modbus_reg_val)
-
-            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val, timeout=None)
+        for i, (pointer, future) in enumerate(next_pointers):
+            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
+            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame)
+            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
 
             if cmd.response:
                 resp_frame = await future
@@ -703,7 +708,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         responses = await asyncio.gather(
             *[driver.send(QueryDeviceStatus(device=DeviceShort(addr_int))) for addr_int in addresses],
         )
-        
+
         queries = []
         logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
         for addr_int, rsp in zip(addresses, responses):
