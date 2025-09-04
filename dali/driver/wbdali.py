@@ -272,6 +272,7 @@ class WBDALIDriver(DALIDriver):
 
         # FIXME: I don't know the bette way
         await asyncio.wait_for(self.mqtt_client._connected, timeout=5)
+        self.rpc_id_counter += 1
         await self.mqtt_client.publish(
             "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response",
             json.dumps(
@@ -293,7 +294,7 @@ class WBDALIDriver(DALIDriver):
                         "stop_bits": self.config.modbus_stop_bits,
                         "msg": msg,
                     },
-                    "id": 53,
+                    "id": self.rpc_id_counter,
                 }
             ),
         )
@@ -496,6 +497,7 @@ class WBDALIDriver(DALIDriver):
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
         self.mqtt_client = self._create_mqtt_client()
+        self.rpc_id_counter = 0
         self.cmd_counter = 0
         self.send_barrier = Barrier(
             self.config.barrier_max_concurrent_tasks,
