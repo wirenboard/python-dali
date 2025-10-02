@@ -3,31 +3,34 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import struct
-import time
-from time import sleep
-from typing import Any, Callable, Generator, Iterable, NamedTuple, Optional
-from urllib.parse import ParseResult, urlparse, urlunparse
+import os
+from dataclasses import dataclass
+from enum import StrEnum
+from itertools import groupby
+from operator import itemgetter
+from typing import Any, Iterable, Optional
 
 import aiomqtt
 
-import dali.gear
-import dali.gear.general as gear
-from dali import command, frame, gear, sequences
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
 from dali.barrier import Barrier
-from dali.command import Command, Response
-from dali.device.general import (QueryDeviceStatus, QueryDeviceStatusResponse,
-                                 QueryInstanceEnabled, QueryInstanceType,
-                                 QueryNumberOfInstances, StartQuiescentMode,
-                                 StopQuiescentMode)
+from dali.command import Command, Response, from_frame
+from dali.device.general import (
+    QueryDeviceStatus,
+    QueryDeviceStatusResponse,
+    QueryInstanceEnabled,
+    QueryInstanceType,
+    QueryNumberOfInstances,
+    StartQuiescentMode,
+    StopQuiescentMode,
+)
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
-from dali.driver import trace_logging  # noqa: F401
-from dali.driver.base import AsyncDALIDriver, DALIDriver, SyncDALIDriver
+from dali.driver.base import DALIDriver
 from dali.driver.hid import _callback
-from dali.frame import BackwardFrame, BackwardFrameError
-from dali.sequences import progress as sequence_progress
-from dali.sequences import sleep as sequence_sleep
+from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
+from dali.gear.general import EnableDeviceType
+from dali.sequences import progress as seq_progress
+from dali.sequences import sleep as seq_sleep
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита
@@ -39,8 +42,25 @@ ERR_LINE_BUSY = 0x4000  # линия занята
 ERR_STILL_SENDING = 0x8000
 
 
-from itertools import groupby
-from operator import itemgetter
+@dataclass
+class WBDALIConfig:
+    """Configuration for WBDALIDriver."""
+
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_username: Optional[str] = None
+    mqtt_password: Optional[str] = None
+    device_name: str = "wb-mdali_2"
+    modbus_slave_id: int = 2
+    modbus_port_path: str = "/dev/ttyRS485-1"
+    modbus_baud_rate: int = 115200
+    modbus_parity: str = "N"
+    modbus_data_bits: int = 8
+    modbus_stop_bits: int = 2
+    reconnect_interval: int = 1
+    reconnect_limit: Optional[int] = None
+    barrier_max_concurrent_tasks: int = 3
+    barrier_timeout: float = 0.01
 
 
 class WBDALIDriver(DALIDriver):
@@ -61,12 +81,13 @@ class WBDALIDriver(DALIDriver):
 
         # FIXME: I don't know the bette way
         await asyncio.wait_for(self.mqtt_client._connected, timeout=5)
+        self.rpc_id_counter += 1
         await self.mqtt_client.publish(
             "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response",
             json.dumps(
                 {
                     "params": {
-                        "slave_id": 2,
+                        "slave_id": self.config.modbus_slave_id,
                         "function": function,
                         "address": address,
                         "count": count,
@@ -75,14 +96,14 @@ class WBDALIDriver(DALIDriver):
                         "frame_timeout": 0,
                         "protocol": "modbus",
                         "format": "HEX",
-                        "path": "/dev/ttyRS485-1",
-                        "baud_rate": 115200,
-                        "parity": "N",
-                        "data_bits": 8,
-                        "stop_bits": 2,
+                        "path": self.config.modbus_port_path,
+                        "baud_rate": self.config.modbus_baud_rate,
+                        "parity": self.config.modbus_parity,
+                        "data_bits": self.config.modbus_data_bits,
+                        "stop_bits": self.config.modbus_stop_bits,
                         "msg": msg,
                     },
-                    "id": 53,
+                    "id": self.rpc_id_counter,
                 }
             ),
         )
@@ -135,16 +156,18 @@ class WBDALIDriver(DALIDriver):
 
     async def _incoming_ff_task(self):
         self.logger.debug("Incoming FF task running...")
-        async with aiomqtt.Client("localhost") as mqtt_client:
+        async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
-            await mqtt_client.subscribe(f"/devices/wb-mdali_2/controls/channel1_receive_24bit_forward")
+            await mqtt_client.subscribe(
+                f"/devices/{self.config.device_name}/controls/channel1_receive_24bit_forward"
+            )
             async for message in mqtt_client.messages:
                 self.logger.debug(f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}")
 
                 if message.retain:
                     continue
-                frame = dali.frame.ForwardFrame(24, int(message.payload) >> 8)
-                cmd = dali.command.from_frame(frame, dev_inst_map=self.dev_inst_map)
+                frame = ForwardFrame(24, int(message.payload) >> 8)
+                cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
                 self.logger.debug(f"Received FF24: {cmd}")
                 self.bus_traffic._invoke(cmd, None, False)
 
@@ -157,7 +180,9 @@ class WBDALIDriver(DALIDriver):
 
             # Subscribe to reply topics
             for i in range(self.device_queue_size):
-                await self.mqtt_client.subscribe(f"/devices/wb-mdali_2/controls/channel1_reply{i}")
+                await self.mqtt_client.subscribe(
+                    f"/devices/{self.config.device_name}/controls/channel1_reply{i}"
+                )
             self.connected.set()
 
             # Listen for messages
@@ -185,8 +210,12 @@ class WBDALIDriver(DALIDriver):
                     or ((resp & ERR_FRAME_LENGTH) != 0)
                     or ((resp & ERR_STOP_BITS) != 0)
                 ):
-                    self.logger.error("Received error in response: %x (%x)", resp, resp & ~ERR_STILL_SENDING)
-                    resp_future.set_result(dali.frame.BackwardFrameError(0))
+                    self.logger.error(
+                        "Received error in response: %x (%x)",
+                        resp,
+                        resp & ~ERR_STILL_SENDING,
+                    )
+                    resp_future.set_result(BackwardFrameError(0))
                     continue
 
                 if (resp & ERR_TIMEOUT) != 0:
@@ -194,28 +223,43 @@ class WBDALIDriver(DALIDriver):
                     resp_future.set_result(None)
                     continue
 
-                resp_future.set_result(dali.frame.BackwardFrame(resp & ~ERR_STILL_SENDING))
+                resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
 
-    def __init__(self, path, reconnect_interval=1, reconnect_limit=None, glob=False, dev_inst_map=None):
+    def _create_mqtt_client(self) -> aiomqtt.Client:
+        """Create and configure MQTT client."""
+        client_kwargs = {
+            "hostname": self.config.mqtt_host,
+            "port": self.config.mqtt_port,
+        }
+
+        if self.config.mqtt_username:
+            client_kwargs["username"] = self.config.mqtt_username
+        if self.config.mqtt_password:
+            client_kwargs["password"] = self.config.mqtt_password
+
+        return aiomqtt.Client(**client_kwargs)
+
+    def __init__(
+        self,
+        config: Optional[WBDALIConfig] = None,
+        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
+    ):
+        self.config = config or WBDALIConfig()
+        self.dev_inst_map = dev_inst_map
         self.logger.debug(
-            "path=%s, reconnect_interval=%s, reconnect_limit=%s, glob=%s, dev_inst_map=%s",
-            path,
-            reconnect_interval,
-            reconnect_limit,
-            glob,
+            "path=%s, reconnect_interval=%s, reconnect_limit=%s, dev_inst_map=%s",
+            config.modbus_port_path,
+            config.reconnect_interval,
+            config.reconnect_limit,
             dev_inst_map,
         )
 
+        self.responses = {}
+
         self._log = logging.getLogger()
-        self._path = path
-        self.mqtt_client = None
-        self._reconnect_interval = reconnect_interval
-        self._reconnect_limit = reconnect_limit
         self._reconnect_count = 0
         self._reconnect_task = None
-        self._glob = glob
 
-        self.dev_inst_map = dev_inst_map
         self._f = None
 
         self._current_command_frame = None
@@ -261,9 +305,13 @@ class WBDALIDriver(DALIDriver):
         self.device_queue_size = 10
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
-        self.mqtt_client = aiomqtt.Client("localhost")
+        self.mqtt_client = self._create_mqtt_client()
+        self.rpc_id_counter = 0
         self.cmd_counter = 0
-        self.send_barrier = Barrier(3, default_timeout=0.01)
+        self.send_barrier = Barrier(
+            self.config.barrier_max_concurrent_tasks,
+            default_timeout=self.config.barrier_timeout,
+        )
 
     async def run_sequence(
         self,
@@ -295,9 +343,9 @@ class WBDALIDriver(DALIDriver):
                         return r.value
                     response = None
                     logging.debug("got command from sequence: %s", cmd)
-                    if isinstance(cmd, sequences.sleep):
+                    if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
-                    elif isinstance(cmd, sequences.progress):
+                    elif isinstance(cmd, seq_progress):
                         if progress:
                             progress(cmd)
                     else:
@@ -305,7 +353,7 @@ class WBDALIDriver(DALIDriver):
                             # The 'send()' calls here *do* refer to the DALI
                             # transmit method
                             await self.send(
-                                gear.general.EnableDeviceType(cmd.devicetype),
+                                EnableDeviceType(cmd.devicetype),
                             )
                         response = await self.send(cmd)
             finally:
@@ -349,9 +397,28 @@ class WBDALIDriver(DALIDriver):
                     msg=msg,
                 )
 
-    async def send(self, cmd: command.Command) -> Optional[command.Response]:
+    def _encode_frame_for_modbus(self, dali_frame: frame.Frame) -> int:
+        frame_len = len(dali_frame)
+        frame_int = dali_frame.as_integer
+
+        if frame_len == 16:
+            return frame_int << 16
+        elif frame_len == 24:
+            return (frame_int << 8) | 0x01
+        elif frame_len == 25:
+            first_two_bytes = frame_int >> 8
+            last_byte = frame_int & 0xFF
+            # insert the 0x01 bit in the middle
+            dali_25bit_frame = (first_two_bytes << 1) | 0x00
+            dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
+            result = (dali_25bit_frame << 7) | 0x02
+            self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", result)
+            return result
+        else:
+            raise ValueError(f"Unsupported frame length: {frame_len}")
+
+    async def send(self, cmd: Command) -> Optional[Response]:
         self.logger.debug("send(command=%s)", cmd)
-        response = None
         response = None
         # await self.connected.wait()
         # await asyncio.sleep(0.001)
@@ -360,7 +427,10 @@ class WBDALIDriver(DALIDriver):
         # await self._not_waiting_for_reply.wait()
 
         if (cmd.sendtwice) and (cmd.response is not None):
-            self.logger.warning("Command %s has sendtwice=True and a response, this is not supported", cmd)
+            self.logger.warning(
+                "Command %s has sendtwice=True and a response, this is not supported",
+                cmd,
+            )
             raise ValueError("Command with sendtwice=True cannot have a response")
 
         if cmd.sendtwice:
@@ -370,24 +440,10 @@ class WBDALIDriver(DALIDriver):
                 await self.get_next_pointer(),
             ]
         # if cmd.bits
-        for i in range(2 if cmd.sendtwice else 1):
-            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, 2 if cmd.sendtwice else 1)
-            pointer, future = next_pointers[i]
-
-            if len(cmd.frame) == 16:
-                modbus_reg_val = cmd.frame.as_integer << 16
-            elif len(cmd.frame) == 24:
-                modbus_reg_val = (cmd.frame.as_integer << 8) | 0x01
-            elif len(cmd.frame) == 25:
-                first_two_bytes = cmd.frame.as_integer >> 8
-                last_byte = cmd.frame.as_integer & 0xFF
-                #insert the 0x01 bit in the middle
-                dali_25bit_frame = (first_two_bytes << 1) | 0x00
-                dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
-                modbus_reg_val = (dali_25bit_frame << 7) | 0x02
-                self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", modbus_reg_val)
-
-            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val, timeout=None)
+        for i, (pointer, future) in enumerate(next_pointers):
+            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
+            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame)
+            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
 
             if cmd.response:
                 resp_frame = await future
@@ -425,7 +481,7 @@ class WBDALIDriver(DALIDriver):
         """
         if self._f:
             return True
-        self._log.debug("trying to connect to %s...", self._path)
+        self._log.debug("trying to connect to %s...", self.config.modbus_port_path)
 
         self._reconnect_count = 0
         # self.connected.set()
@@ -443,13 +499,13 @@ class WBDALIDriver(DALIDriver):
 
     async def _reconnect(self):
         self._reconnect_count += 1
-        if self._reconnect_limit is not None and self._reconnect_count > self._reconnect_limit:
+        if self.config.reconnect_limit is not None and self._reconnect_count > self.config.reconnect_limit:
             # We have failed.
             self._log.debug("connection limit reached")
             self._reconnect_count = 0
             self._reconnect_task = None
             return
-        await asyncio.sleep(self._reconnect_interval)
+        await asyncio.sleep(self.config.reconnect_interval)
         self._reconnect_task = None
         self.connect()
 
@@ -503,16 +559,16 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         logging.debug("Starting autodiscover with addresses: %s", addresses)
 
         if isinstance(addresses, int):
-            addresses = [n for n in range(0, addresses)]
+            addresses = list(range(0, addresses))
         elif isinstance(addresses, tuple) and len(addresses) == 2:
-            addresses = [n for n in range(addresses[0], addresses[1] + 1)]
+            addresses = list(range(addresses[0], addresses[1] + 1))
 
         # Use quiescent mode to reduce bus contention from input devices
         await driver.send(StartQuiescentMode(DeviceBroadcast()))
         responses = await asyncio.gather(
             *[driver.send(QueryDeviceStatus(device=DeviceShort(addr_int))) for addr_int in addresses],
         )
-        
+
         queries = []
         logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
         for addr_int, rsp in zip(addresses, responses):
@@ -568,9 +624,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
             if check_bad_rsp(type_rsp):
                 continue
 
-            logging.debug(
-                "message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value
-            )
+            logging.debug("message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value)
 
             # Add the type to the device/instance map
             self.add_type(
