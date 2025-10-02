@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import struct
-import sys
 import time
 from time import sleep
 from typing import Any, Callable, Generator, Iterable, NamedTuple, Optional
@@ -16,6 +15,7 @@ import dali.gear
 import dali.gear.general as gear
 from dali import command, frame, gear, sequences
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
+from dali.barrier import Barrier
 from dali.command import Command, Response
 from dali.device.general import (QueryDeviceStatus, QueryDeviceStatusResponse,
                                  QueryInstanceEnabled, QueryInstanceType,
@@ -28,11 +28,6 @@ from dali.driver.hid import _callback
 from dali.frame import BackwardFrame, BackwardFrameError
 from dali.sequences import progress as sequence_progress
 from dali.sequences import sleep as sequence_sleep
-
-if sys.version_info < (3, 11):
-    from dali.backports import Barrier
-else:
-    from asyncio import Barrier
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита
