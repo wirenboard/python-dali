@@ -1,1 +1,1 @@
-buildDebArchAll()
+buildDebArchAll customReleaseBranchPattern: 'wb'
