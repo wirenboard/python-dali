@@ -5,13 +5,13 @@ try:
 except ImportError:
     import mock
 
-from dali.driver.wbdali import WBDALIConfig, WBDALIDriver
+from dali.driver.wbdali import WBDALIDriver
 
 
 class TestWBDALIDriver(unittest.TestCase):
     @mock.patch("aiomqtt.Client")
     def test_encode_frame_for_modbus(self, mock_client):
-        driver = WBDALIDriver(WBDALIConfig(modbus_port_path="123"))
+        driver = WBDALIDriver("123")
 
         frame_16 = mock.MagicMock()
         frame_16.__len__.return_value = 16
