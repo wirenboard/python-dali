@@ -312,3 +312,124 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             await driver.send_modbus_rpc_no_response(
                 function=16, address=1930, count=4, msg="1234567890abcdef"
             )
+
+    @patch("aiomqtt.Client")
+    async def test_reset_queue(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        connected_future = asyncio.Future()
+        connected_future.set_result(None)
+        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client.publish = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+        driver.rpc_id_counter = 10
+        driver.next_pointer = 5
+
+        await driver.reset_queue()
+
+        self.assertEqual(driver.next_pointer, 0)
+        self.assertEqual(mock_mqtt_client.publish.call_count, 2)
+
+        first_call = mock_mqtt_client.publish.call_args_list[0]
+        first_payload = json.loads(first_call[0][1])
+        self.assertEqual(first_payload["params"]["function"], 16)
+        self.assertEqual(first_payload["params"]["address"], 1920)
+        self.assertEqual(first_payload["params"]["count"], 10 * 2)
+        self.assertEqual(first_payload["params"]["msg"], "0000fbdf" * 10)
+
+        second_call = mock_mqtt_client.publish.call_args_list[1]
+        second_payload = json.loads(second_call[0][1])
+        self.assertEqual(second_payload["params"]["function"], 6)
+        self.assertEqual(second_payload["params"]["address"], 1960)
+        self.assertEqual(second_payload["params"]["count"], 1)
+        self.assertEqual(second_payload["params"]["msg"], "0000")
+
+    @patch("aiomqtt.Client")
+    async def test_get_next_pointer(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+        driver.next_pointer = 5
+        driver.cmd_counter = 10
+
+        pointer, future = await driver.get_next_pointer()
+
+        self.assertEqual(pointer, 5)
+        self.assertIsInstance(future, asyncio.Future)
+        self.assertEqual(driver.next_pointer, 6)
+        self.assertEqual(driver.cmd_counter, 11)
+        self.assertIs(driver.responses[5], future)
+
+    @patch("aiomqtt.Client")
+    async def test_get_next_pointer_wraps_around(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+        driver.next_pointer = 19
+        driver.device_queue_size = 20
+
+        pointer1, _ = await driver.get_next_pointer()
+        self.assertEqual(pointer1, 19)
+        self.assertEqual(driver.next_pointer, 0)
+
+    @patch("aiomqtt.Client")
+    async def test_get_next_pointer_waits_for_pending_response(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+        driver.next_pointer = 3
+
+        pending_future = asyncio.Future()
+        driver.responses[3] = pending_future
+
+        task = asyncio.create_task(driver.get_next_pointer())
+
+        await asyncio.sleep(0.01)
+
+        self.assertFalse(task.done())
+
+        pending_future.set_result(None)
+
+        pointer, future = await task
+        self.assertEqual(pointer, 3)
+
+    @patch("aiomqtt.Client")
+    async def test_add_cmd_to_send_buffer_with_barrier_timeout(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        connected_future = asyncio.Future()
+        connected_future.set_result(None)
+        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client.publish = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+
+        driver.send_barrier = AsyncMock()
+        driver.send_barrier.wait = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await driver._add_cmd_to_send_buffer(5, 0x12340000)
+
+    @patch("aiomqtt.Client")
+    async def test_send_modbus_rpc_increments_counter(self, mock_mqtt_client_class):
+        mock_mqtt_client = AsyncMock()
+        connected_future = asyncio.Future()
+        connected_future.set_result(None)
+        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client.publish = AsyncMock()
+        mock_mqtt_client_class.return_value = mock_mqtt_client
+
+        driver = WBDALIDriver(self.config)
+        driver.rpc_id_counter = 100
+
+        await driver.send_modbus_rpc_no_response(function=16, address=1920, count=2, msg="12340000")
+
+        self.assertEqual(driver.rpc_id_counter, 101)
+
+        await driver.send_modbus_rpc_no_response(function=16, address=1922, count=2, msg="56780000")
+
+        self.assertEqual(driver.rpc_id_counter, 102)
