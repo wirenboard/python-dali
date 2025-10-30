@@ -27,7 +27,7 @@ from dali.device.general import (
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
 from dali.driver.base import DALIDriver
 from dali.driver.hid import _callback
-from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
+from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
@@ -591,7 +591,7 @@ class WBDALIDriver(DALIDriver):
                     msg=msg,
                 )
 
-    def _encode_frame_for_modbus(self, dali_frame: frame.Frame) -> int:
+    def _encode_frame_for_modbus(self, dali_frame: Frame) -> int:
         frame_len = len(dali_frame)
         frame_int = dali_frame.as_integer
 
