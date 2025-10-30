@@ -56,9 +56,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        assert driver._encode_frame_for_modbus(frame_16) == 305397760
-        assert driver._encode_frame_for_modbus(frame_24) == 305419777
-        assert driver._encode_frame_for_modbus(frame_25) == 4886705026
+        assert driver._encode_frame_for_modbus(frame_16) == 0x12340000
+        assert driver._encode_frame_for_modbus(frame_24) == 0x12345601
+        assert driver._encode_frame_for_modbus(frame_25) == 0x123453382
 
         with self.assertRaises(ValueError):
             driver._encode_frame_for_modbus(frame_invalid)
