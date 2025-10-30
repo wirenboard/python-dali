@@ -242,6 +242,7 @@ class WBDALIConfig:
     mqtt_username: Optional[str] = None
     mqtt_password: Optional[str] = None
     device_name: str = "wb-mdali_2"
+    channel: int = 1
     modbus_slave_id: int = 2
     modbus_port_path: str = "/dev/ttyRS485-1"
     modbus_baud_rate: int = 115200
@@ -350,7 +351,7 @@ class WBDALIDriver(DALIDriver):
         async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
             await mqtt_client.subscribe(
-                f"/devices/{self.config.device_name}/controls/channel1_receive_24bit_forward"
+                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward"
             )
             async for message in mqtt_client.messages:
                 self.logger.debug(f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}")
@@ -372,7 +373,7 @@ class WBDALIDriver(DALIDriver):
             # Subscribe to reply topics
             for i in range(self.device_queue_size):
                 await self.mqtt_client.subscribe(
-                    f"/devices/{self.config.device_name}/controls/channel1_reply{i}"
+                    f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
                 )
             self.connected.set()
 
@@ -387,7 +388,9 @@ class WBDALIDriver(DALIDriver):
                 resp = int(message.payload.decode())
 
                 # Process the message as needed
-                resp_pointer = int(str(message.topic).split("/")[-1].replace("channel1_reply", ""))
+                resp_pointer = int(
+                    str(message.topic).split("/")[-1].replace(f"channel{self.config.channel}_reply", "")
+                )
 
                 if resp_pointer not in self.responses:
                     self.logger.warning(f"Received response for unknown pointer: {resp_pointer}")
