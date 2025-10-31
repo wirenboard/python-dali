@@ -265,7 +265,7 @@ class WBDALIDriver(DALIDriver):
     _pending = None
     _response_message = None
 
-    async def send_modbus_rpc_no_response(self, function, address, count, msg):
+    async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
         """Send a Modbus RPC command without expecting a response."""
         self.logger.debug(
             f"Sending Modbus RPC command: function={function}, address={address}, count={count}, msg={msg}"
@@ -300,7 +300,7 @@ class WBDALIDriver(DALIDriver):
             ),
         )
 
-    async def reset_queue(self):
+    async def reset_queue(self) -> None:
         self.logger.debug("Resetting message queue")
         self.next_pointer = 0
 
@@ -346,7 +346,7 @@ class WBDALIDriver(DALIDriver):
 
             return pointer, self.responses[pointer]
 
-    async def _incoming_ff_task(self):
+    async def _incoming_ff_task(self) -> None:
         self.logger.debug("Incoming FF task running...")
         async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
@@ -365,7 +365,7 @@ class WBDALIDriver(DALIDriver):
 
         # Subscribe to reply topics
 
-    async def _read_task(self):
+    async def _read_task(self) -> None:
         self.logger.debug("Read task running...")
         async with self.mqtt_client:
             self.logger.debug("Connected to MQTT broker")
@@ -389,7 +389,9 @@ class WBDALIDriver(DALIDriver):
 
                 # Process the message as needed
                 resp_pointer = int(
-                    str(message.topic).split("/")[-1].replace(f"channel{self.config.channel}_reply", "")
+                    str(message.topic)
+                    .rsplit("/", maxsplit=1)[-1]
+                    .replace(f"channel{self.config.channel}_reply", "")
                 )
 
                 if resp_pointer not in self.responses:
@@ -553,13 +555,13 @@ class WBDALIDriver(DALIDriver):
             finally:
                 seq.close()
 
-    def wait_for_response(self):
+    def wait_for_response(self) -> None:
         self.logger.debug("wait_for_response()")
 
-    def construct(self, command):
+    def construct(self, command) -> None:
         self.logger.debug("construct(command=%s)", command)
 
-    def extract(self, data):
+    def extract(self, data) -> None:
         self.logger.debug("extract(data=%s)", data)
 
     async def _add_cmd_to_send_buffer(self, pointer: int, reg_value: int, timeout: int = None) -> None:
@@ -578,7 +580,7 @@ class WBDALIDriver(DALIDriver):
 
             # magic, credit: https://docs.python.org/2.6/library/itertools.html#examples
             # [1, 4,5,6, 10, 15,16,17,18, 22, 25,26,27,28] => [1], [4,5,6], [10], [15,16,17,18], [22], [25,26,27,28]
-            for k, g in groupby(enumerate(pointers), lambda ix: ix[0] - ix[1]):
+            for _, g in groupby(enumerate(pointers), lambda ix: ix[0] - ix[1]):
                 conseq_range = list((map(itemgetter(1), g)))
                 start_pointer = conseq_range[0]
                 count = len(conseq_range)
@@ -597,9 +599,9 @@ class WBDALIDriver(DALIDriver):
 
         if frame_len == 16:
             return frame_int << 16
-        elif frame_len == 24:
+        if frame_len == 24:
             return (frame_int << 8) | 0x01
-        elif frame_len == 25:
+        if frame_len == 25:
             first_two_bytes = frame_int >> 8
             last_byte = frame_int & 0xFF
             # insert the 0x01 bit in the middle
@@ -608,8 +610,8 @@ class WBDALIDriver(DALIDriver):
             result = (dali_25bit_frame << 7) | 0x02
             self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", result)
             return result
-        else:
-            raise ValueError(f"Unsupported frame length: {frame_len}")
+
+        raise ValueError(f"Unsupported frame length: {frame_len}")
 
     async def send(self, cmd: Command) -> Optional[Response]:
         self.logger.debug("send(command=%s)", cmd)
@@ -646,19 +648,19 @@ class WBDALIDriver(DALIDriver):
         self.bus_traffic._invoke(cmd, response, False)
         return response
 
-    def receive(self):
+    def receive(self) -> None:
         self.logger.debug("receive()")
 
-    def readFirmwareVersion(self):
+    def readFirmwareVersion(self) -> None:
         self.logger.debug("readFirmwareVersion()")
 
-    def enableSniffing(self):
+    def enableSniffing(self) -> None:
         self.logger.debug("enableSniffing()")
 
     def disableSniffing(self):
         self.logger.debug("disableSniffing()")
 
-    async def connect(self):
+    async def connect(self) -> bool:
         """Attempt to connect to the device.
 
         Attempts to open the device.  If this fails, schedules a
@@ -691,7 +693,7 @@ class WBDALIDriver(DALIDriver):
         self.connection_status_callback._invoke("connected")
         return True
 
-    async def _reconnect(self):
+    async def _reconnect(self) -> None:
         self._reconnect_count += 1
         if self.config.reconnect_limit is not None and self._reconnect_count > self.config.reconnect_limit:
             # We have failed.
@@ -703,7 +705,7 @@ class WBDALIDriver(DALIDriver):
         self._reconnect_task = None
         self.connect()
 
-    def disconnect(self, reconnect=False):
+    def disconnect(self, reconnect: bool = False) -> None:
         self._log.debug("disconnecting")
         if self._reconnect_task:
             self._reconnect_task.cancel()
