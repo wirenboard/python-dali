@@ -39,6 +39,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     def test_encode_frame_for_modbus(self, mock_client):
+        """Test encoding of DALI frames into Modbus frames."""
         driver = WBDALIDriver(self.config)
 
         frame_16 = MagicMock()
@@ -65,6 +66,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_command_without_response(self, mock_mqtt_client_class):
+        """Test sending a command that does not expect a response."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -92,6 +94,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_command_with_response(self, mock_mqtt_client_class):
+        """Test sending a command that expects a response."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -123,6 +126,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_command_sendtwice_with_response_raises_error(self, mock_mqtt_client_class):
+        """Test that sending a command with sendtwice=True and a response raises an error."""
         mock_mqtt_client = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -137,6 +141,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_command_sendtwice_without_response(self, mock_mqtt_client_class):
+        """Test sending a command with sendtwice=True and no response."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -162,6 +167,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_add_cmd_to_send_buffer_single_command(self, mock_mqtt_client_class):
+        """Test adding a single command to the send buffer."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -194,6 +200,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_add_cmd_to_send_buffer_multiple_consecutive_commands(self, mock_mqtt_client_class):
+        """Test adding multiple consecutive commands to the send buffer."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -221,6 +228,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_add_cmd_to_send_buffer_non_consecutive_commands(self, mock_mqtt_client_class):
+        """Test adding non-consecutive commands to the send buffer."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -255,6 +263,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_modbus_rpc_no_response_mqtt_publish(self, mock_mqtt_client_class):
+        """Test that send_modbus_rpc_no_response sends the correct MQTT publish."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -300,6 +309,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_modbus_rpc_mqtt_connection_timeout(self, mock_mqtt_client_class):
+        """Test that send_modbus_rpc_no_response raises TimeoutError on MQTT connection timeout."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_exception(asyncio.TimeoutError())
@@ -315,6 +325,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_reset_queue(self, mock_mqtt_client_class):
+        """Test that reset_queue sends the correct Modbus commands to reset the device queue."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -347,6 +358,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_get_next_pointer(self, mock_mqtt_client_class):
+        """Test that get_next_pointer returns the correct pointer and future."""
         mock_mqtt_client = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -364,6 +376,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_get_next_pointer_wraps_around(self, mock_mqtt_client_class):
+        """Test that get_next_pointer wraps around when reaching device_queue_size."""
         mock_mqtt_client = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -377,6 +390,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_get_next_pointer_waits_for_pending_response(self, mock_mqtt_client_class):
+        """Test that get_next_pointer waits if there is a pending response for the next pointer."""
         mock_mqtt_client = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -399,6 +413,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_add_cmd_to_send_buffer_with_barrier_timeout(self, mock_mqtt_client_class):
+        """Test that _add_cmd_to_send_buffer raises TimeoutError on barrier timeout."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
@@ -416,6 +431,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     @patch("aiomqtt.Client")
     async def test_send_modbus_rpc_increments_counter(self, mock_mqtt_client_class):
+        """Test that rpc_id_counter increments correctly with multiple calls."""
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
