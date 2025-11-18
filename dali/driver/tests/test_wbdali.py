@@ -12,14 +12,14 @@ from dali.driver.wbdali import WBDALIConfig, WBDALIDriver
 from dali.frame import BackwardFrame, ForwardFrame
 
 
-class MockCommand(Command):
+class _MockCommand(Command):
     def __init__(self, sendtwice=False, response_class=None):
         super().__init__(ForwardFrame(16, [0x12, 0x34]))
         self.sendtwice = sendtwice
         self.response = response_class
 
     def __str__(self):
-        return "MockCommand"
+        return "_MockCommand"
 
 
 class MockResponse(Response):
@@ -81,7 +81,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
         driver.next_pointer = 0
 
-        cmd = MockCommand(sendtwice=False, response_class=None)
+        cmd = _MockCommand(sendtwice=False, response_class=None)
 
         mock_future = AsyncMock()
         mock_get_next_pointer = AsyncMock(return_value=(0, mock_future))
@@ -109,7 +109,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
         driver.next_pointer = 0
 
-        cmd = MockCommand(sendtwice=False, response_class=MockResponse)
+        cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
 
         response_frame = BackwardFrame(0x56)
         mock_future = asyncio.Future()
@@ -132,7 +132,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         driver = WBDALIDriver(self.config)
 
-        cmd = MockCommand(sendtwice=True, response_class=MockResponse)
+        cmd = _MockCommand(sendtwice=True, response_class=MockResponse)
 
         with self.assertRaises(ValueError) as context:
             await driver.send(cmd)
@@ -152,7 +152,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config)
         driver.bus_traffic._invoke = MagicMock()
 
-        cmd = MockCommand(sendtwice=True, response_class=None)
+        cmd = _MockCommand(sendtwice=True, response_class=None)
 
         mock_future1 = AsyncMock()
         mock_future2 = AsyncMock()
