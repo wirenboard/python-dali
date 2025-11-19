@@ -1,3 +1,10 @@
+python-dali (0.11-wb100) stable; urgency=medium
+
+  * Fix build
+  * Add Jenkinsfile
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 19 Nov 2025 19:24:19 +0500
+
 python-dali (0.11) unstable; urgency=low
 
   * New release 0.11
